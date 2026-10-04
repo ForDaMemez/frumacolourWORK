@@ -23,12 +23,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -51,6 +53,10 @@ public class FrumaColorClient implements ClientModInitializer {
     private static boolean logging = false;
     private static final Set<String> seen = new HashSet<>();
     private static final Set<String> SPRITES = ConcurrentHashMap.newKeySet();
+
+    // images already recolored (so each one is only tinted once)
+    private static final Set<NativeImage> DONE =
+        Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
     // diagnostics, reset each time the mod triggers a reload
     private static final AtomicInteger SEEN_SINCE_RELOAD = new AtomicInteger();
@@ -101,8 +107,8 @@ public class FrumaColorClient implements ClientModInitializer {
                 .then(ClientCommandManager.literal("debug")
                     .executes(ctx -> {
                         msg(ctx.getSource(), "Rules saved: " + config.textures.size()
-                            + " | textures loaded since last mod reload: " + SEEN_SINCE_RELOAD.get()
-                            + " | recolored: " + TINTED_SINCE_RELOAD.get()
+                            + " | textures created since last mod reload: " + SEEN_SINCE_RELOAD.get()
+                            + " | images recolored at upload: " + TINTED_SINCE_RELOAD.get()
                             + " | total names ever seen: " + SPRITES.size());
                         for (String s : TINTED_SAMPLE) msg(ctx.getSource(), "recolored: " + s);
                         return 1;
@@ -261,19 +267,26 @@ public class FrumaColorClient implements ClientModInitializer {
         mc.execute(mc::reloadResourcePacks);
     }
 
-    /** Called from the sprite mixin each time a texture is loaded. */
+    /** Called when a texture is created: only records its name. */
     public static void onSprite(String name, NativeImage img) {
         SEEN_SINCE_RELOAD.incrementAndGet();
         if (SPRITES.size() < 200000) SPRITES.add(name);
-        if (config.textures.isEmpty() || img == null) return;
+    }
+
+    /** Called right before a texture is uploaded to the GPU: applies the recolor to every image it will draw from. */
+    public static void onUpload(String name, NativeImage[] images) {
+        if (config.textures.isEmpty() || images == null) return;
         String lower = name.toLowerCase();
+        Integer rgb = null;
         for (Map.Entry<String, Integer> e : config.textures.entrySet()) {
-            if (lower.contains(e.getKey())) {
-                tint(img, e.getValue());
-                TINTED_SINCE_RELOAD.incrementAndGet();
-                if (TINTED_SAMPLE.size() < 8) TINTED_SAMPLE.add(name);
-                return;
-            }
+            if (lower.contains(e.getKey())) { rgb = e.getValue(); break; }
+        }
+        if (rgb == null) return;
+        for (NativeImage img : images) {
+            if (img == null || !DONE.add(img)) continue; // each image is only tinted once
+            tint(img, rgb);
+            TINTED_SINCE_RELOAD.incrementAndGet();
+            if (TINTED_SAMPLE.size() < 8 && !TINTED_SAMPLE.contains(name)) TINTED_SAMPLE.add(name);
         }
     }
 
