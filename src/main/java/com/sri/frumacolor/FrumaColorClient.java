@@ -15,15 +15,21 @@ import net.minecraft.client.particle.SingleQuadParticle;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.world.entity.Entity;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class FrumaColorClient implements ClientModInitializer {
 
@@ -124,6 +130,28 @@ public class FrumaColorClient implements ClientModInitializer {
                             msg(ctx.getSource(), "Textures matching '" + kw + "' -> #" + String.format("%06X", rgb) + ". Reloading...");
                             return 1;
                         }))))
+                // /fcolor model <number> [hex] : look up an oak_boat custom model number, show its textures, optionally recolor them
+                .then(ClientCommandManager.literal("model")
+                    .then(ClientCommandManager.argument("number", StringArgumentType.word())
+                        .executes(ctx -> {
+                            List<String> kws = resolve(ctx.getSource(), StringArgumentType.getString(ctx, "number"));
+                            for (String k : kws) msg(ctx.getSource(), "texture: " + k);
+                            if (!kws.isEmpty()) msg(ctx.getSource(), "Add a hex color to the command to recolor these.");
+                            return 1;
+                        })
+                        .then(ClientCommandManager.argument("hex", StringArgumentType.word()).executes(ctx -> {
+                            Integer rgb = parseHex(StringArgumentType.getString(ctx, "hex"));
+                            if (rgb == null) { msg(ctx.getSource(), "Bad hex color."); return 0; }
+                            List<String> kws = resolve(ctx.getSource(), StringArgumentType.getString(ctx, "number"));
+                            if (kws.isEmpty()) return 0;
+                            for (String k : kws) {
+                                config.textures.put(k, rgb);
+                                msg(ctx.getSource(), "recoloring '" + k + "' -> #" + String.format("%06X", rgb)
+                                    + "  (undo: /fcolor tex " + k + " off)");
+                            }
+                            save(); reload();
+                            return 1;
+                        }))))
                 // /fcolor find <keyword> : list loaded texture names containing the keyword
                 .then(ClientCommandManager.literal("find")
                     .then(ClientCommandManager.argument("keyword", StringArgumentType.word()).executes(ctx -> {
@@ -211,6 +239,87 @@ public class FrumaColorClient implements ClientModInitializer {
                 img.setPixel(x, y, (a << 24) | (nb << 16) | (ng << 8) | nr);
             }
         }
+    }
+
+    private static String readText(Resource r) {
+        try (java.io.InputStream in = r.open()) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** Turns an oak_boat custom model number into the texture names its model uses. Prints each step. */
+    private static List<String> resolve(FabricClientCommandSource src, String numberRaw) {
+        List<String> out = new ArrayList<>();
+        String number = numberRaw.replaceAll("\\.0+$", "");
+        var rm = Minecraft.getInstance().getResourceManager();
+        String model = null;
+
+        // 1) modern item definition: assets/<ns>/items/oak_boat.json (range_dispatch with thresholds)
+        for (var en : rm.listResources("items", p -> p.getPath().contains("oak_boat")).entrySet()) {
+            String text = readText(en.getValue());
+            Matcher m = Pattern.compile("\"threshold\"\\s*:\\s*" + number
+                + "(?![0-9])(?:\\.0+)?[\\s\\S]*?\"model\"\\s*:\\s*\"([^\"]+)\"").matcher(text);
+            if (m.find()) {
+                model = m.group(1);
+                msg(src, "found " + number + " in " + en.getKey() + " -> model " + model);
+                break;
+            }
+        }
+
+        // 2) older style: overrides inside models/item/oak_boat.json
+        if (model == null) {
+            for (var en : rm.listResources("models", p -> p.getPath().endsWith("item/oak_boat.json")).entrySet()) {
+                String text = readText(en.getValue());
+                Matcher m = Pattern.compile("\"custom_model_data\"\\s*:\\s*" + number
+                    + "(?![0-9])[\\s\\S]*?\"model\"\\s*:\\s*\"([^\"]+)\"").matcher(text);
+                if (m.find()) {
+                    model = m.group(1);
+                    msg(src, "found " + number + " in " + en.getKey() + " -> model " + model);
+                    break;
+                }
+            }
+        }
+
+        if (model == null) {
+            msg(src, "Could not find " + number + " in any oak_boat file. Send me this message.");
+            return out;
+        }
+
+        // 3) read the model file and pull out its textures
+        String ns = "minecraft", path = model;
+        int c = model.indexOf(':');
+        if (c >= 0) { ns = model.substring(0, c); path = model.substring(c + 1); }
+        String target = ns + ":models/" + path + ".json";
+
+        String modelText = null;
+        for (var en : rm.listResources("models", p -> p.getPath().endsWith(".json")).entrySet()) {
+            if (String.valueOf(en.getKey()).equals(target)) {
+                modelText = readText(en.getValue());
+                break;
+            }
+        }
+        if (modelText == null) {
+            msg(src, "Model file not found: " + target + ". Send me this message.");
+            return out;
+        }
+
+        Matcher tb = Pattern.compile("\"textures\"\\s*:\\s*\\{([^}]*)\\}").matcher(modelText);
+        if (!tb.find()) {
+            msg(src, "Model " + target + " has no textures block (it probably uses a parent model). Send me this message.");
+            return out;
+        }
+        Matcher tv = Pattern.compile("\"[^\"]+\"\\s*:\\s*\"([^\"]+)\"").matcher(tb.group(1));
+        while (tv.find()) {
+            String t = tv.group(1);
+            if (t.startsWith("#")) continue;
+            int cc = t.indexOf(':');
+            if (cc >= 0) t = t.substring(cc + 1);
+            out.add(t.toLowerCase());
+        }
+        if (out.isEmpty()) msg(src, "Model had no usable textures. Send me this message.");
+        return out;
     }
 
     private static String normalize(String s) {
