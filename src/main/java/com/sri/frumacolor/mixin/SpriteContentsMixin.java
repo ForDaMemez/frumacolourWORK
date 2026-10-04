@@ -14,10 +14,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class SpriteContentsMixin {
 
     @Shadow @Final private NativeImage originalImage;
+    @Shadow NativeImage[] byMipLevel;
 
+    // runs when a texture is created: just records its name for /fcolor find
     @Inject(method = "<init>", at = @At("TAIL"))
-    private void frumacolor$recolor(CallbackInfo ci) {
+    private void frumacolor$seen(CallbackInfo ci) {
         String name = String.valueOf(((SpriteContents) (Object) this).name());
         FrumaColorClient.onSprite(name, this.originalImage);
+    }
+
+    // runs right before the texture is uploaded to the GPU: this is where the recolor is applied
+    @Inject(method = "uploadFirstFrame", at = @At("HEAD"))
+    private void frumacolor$upload(CallbackInfo ci) {
+        String name = String.valueOf(((SpriteContents) (Object) this).name());
+        FrumaColorClient.onUpload(name, this.byMipLevel);
     }
 }
