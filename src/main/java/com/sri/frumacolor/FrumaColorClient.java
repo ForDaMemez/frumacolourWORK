@@ -77,10 +77,21 @@ public class FrumaColorClient implements ClientModInitializer {
                             msg(ctx.getSource(), "Removed " + id);
                             return 1;
                         })))
+                // /fcolor clear : wipes every saved color and reloads textures
+                .then(ClientCommandManager.literal("clear")
+                    .executes(ctx -> {
+                        config.colors.clear();
+                        config.textures.clear();
+                        config.allColor = -1;
+                        save();
+                        reload();
+                        msg(ctx.getSource(), "Cleared everything. Reloading textures...");
+                        return 1;
+                    }))
                 // /fcolor list
                 .then(ClientCommandManager.literal("list")
                     .executes(ctx -> {
-                        if (config.colors.isEmpty()) msg(ctx.getSource(), "No particles set.");
+                        if (config.colors.isEmpty() && config.textures.isEmpty()) msg(ctx.getSource(), "Nothing set.");
                         config.colors.forEach((k, v) -> msg(ctx.getSource(), k + " -> #" + String.format("%06X", v)));
                         config.textures.forEach((k, v) -> msg(ctx.getSource(), "texture '" + k + "' -> #" + String.format("%06X", v)));
                         if (config.allColor >= 0) msg(ctx.getSource(), "ALL particles -> #" + String.format("%06X", config.allColor));
@@ -316,7 +327,9 @@ public class FrumaColorClient implements ClientModInitializer {
             if (t.startsWith("#")) continue;
             int cc = t.indexOf(':');
             if (cc >= 0) t = t.substring(cc + 1);
-            out.add(t.toLowerCase());
+            t = t.substring(t.lastIndexOf('/') + 1).toLowerCase(); // keep only the file name
+            if (t.equals("empty") || t.isEmpty()) continue;         // skip the blank placeholder
+            if (!out.contains(t)) out.add(t);
         }
         if (out.isEmpty()) msg(src, "Model had no usable textures. Send me this message.");
         return out;
