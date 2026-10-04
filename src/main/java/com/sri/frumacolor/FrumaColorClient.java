@@ -44,6 +44,8 @@ public class FrumaColorClient implements ClientModInitializer {
         public Map<String, Integer> colors = new HashMap<>();   // particle id -> 0xRRGGBB
         public Map<String, Integer> textures = new HashMap<>(); // sprite-name keyword -> 0xRRGGBB
         public int allColor = -1;                                // -1 = off, otherwise tint every particle (test mode)
+        public boolean shift = true;                             // true = keep the multicolor look, pushed toward the target hue
+        public int spread = 25;                                  // shift mode: how many degrees of hue variety to keep
     }
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -103,10 +105,31 @@ public class FrumaColorClient implements ClientModInitializer {
                         msg(ctx.getSource(), "Cleared everything. Reloading textures...");
                         return 1;
                     }))
+                // /fcolor mode shift|solid : shift keeps the multicolor look, solid paints everything one color
+                .then(ClientCommandManager.literal("mode")
+                    .then(ClientCommandManager.literal("shift").executes(ctx -> {
+                        config.shift = true; save(); reload();
+                        msg(ctx.getSource(), "Mode: shift (keeps the multicolor look). Reloading...");
+                        return 1;
+                    }))
+                    .then(ClientCommandManager.literal("solid").executes(ctx -> {
+                        config.shift = false; save(); reload();
+                        msg(ctx.getSource(), "Mode: solid (one flat color). Reloading...");
+                        return 1;
+                    })))
+                // /fcolor spread <0-180> : in shift mode, how much color variety is kept (bigger = more variety)
+                .then(ClientCommandManager.literal("spread")
+                    .then(ClientCommandManager.argument("degrees", IntegerArgumentType.integer(0, 180)).executes(ctx -> {
+                        config.spread = IntegerArgumentType.getInteger(ctx, "degrees");
+                        save(); reload();
+                        msg(ctx.getSource(), "Spread set to " + config.spread + ". Reloading...");
+                        return 1;
+                    })))
                 // /fcolor debug : what happened during the last reload
                 .then(ClientCommandManager.literal("debug")
                     .executes(ctx -> {
                         msg(ctx.getSource(), "Rules saved: " + config.textures.size()
+                            + " | mode: " + (config.shift ? "shift" : "solid") + " spread " + config.spread
                             + " | textures created since last mod reload: " + SEEN_SINCE_RELOAD.get()
                             + " | images recolored at upload: " + TINTED_SINCE_RELOAD.get()
                             + " | total names ever seen: " + SPRITES.size());
@@ -301,19 +324,71 @@ public class FrumaColorClient implements ClientModInitializer {
         }
     }
 
+    /** Recolors an image. Pixels are read and written as ARGB (this fixes the old red/blue swap). */
     private static void tint(NativeImage img, int rgb) {
         int tr = (rgb >> 16) & 0xFF, tg = (rgb >> 8) & 0xFF, tb = rgb & 0xFF;
+        float targetHue = rgbToHsv(tr, tg, tb)[0];
+        float spread = config.spread;
+        boolean shift = config.shift;
+
         for (int y = 0; y < img.getHeight(); y++) {
             for (int x = 0; x < img.getWidth(); x++) {
-                int p = img.getPixel(x, y);               // ABGR
+                int p = img.getPixel(x, y);
                 int a = (p >>> 24) & 0xFF;
                 if (a == 0) continue;
-                int r = p & 0xFF, g = (p >> 8) & 0xFF, b = (p >> 16) & 0xFF;
-                float v = Math.max(r, Math.max(g, b)) / 255f; // keep brightness, swap hue
-                int nr = (int) (tr * v), ng = (int) (tg * v), nb = (int) (tb * v);
-                img.setPixel(x, y, (a << 24) | (nb << 16) | (ng << 8) | nr);
+                int r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
+                int out;
+                if (shift) {
+                    float[] hsv = rgbToHsv(r, g, b);
+                    if (hsv[1] < 0.12f) {
+                        out = p & 0xFFFFFF; // grays and whites stay as they are
+                    } else {
+                        // squeeze the original hue range into a band around the target hue, keeping the order of colors
+                        float h = targetHue + ((hsv[0] - 180f) / 180f) * spread;
+                        if (h < 0) h += 360f;
+                        if (h >= 360f) h -= 360f;
+                        float s = Math.min(1f, 0.55f + 0.45f * hsv[1]);
+                        out = hsvToRgb(h, s, hsv[2]);
+                    }
+                } else {
+                    float v = Math.max(r, Math.max(g, b)) / 255f; // flat color, keeps brightness
+                    out = (((int) (tr * v)) << 16) | (((int) (tg * v)) << 8) | ((int) (tb * v));
+                }
+                img.setPixel(x, y, (a << 24) | (out & 0xFFFFFF));
             }
         }
+    }
+
+    private static float[] rgbToHsv(int r, int g, int b) {
+        float rf = r / 255f, gf = g / 255f, bf = b / 255f;
+        float max = Math.max(rf, Math.max(gf, bf));
+        float min = Math.min(rf, Math.min(gf, bf));
+        float d = max - min;
+        float h;
+        if (d == 0) h = 0;
+        else if (max == rf) h = 60f * (((gf - bf) / d) % 6f);
+        else if (max == gf) h = 60f * (((bf - rf) / d) + 2f);
+        else h = 60f * (((rf - gf) / d) + 4f);
+        if (h < 0) h += 360f;
+        float s = max == 0 ? 0 : d / max;
+        return new float[] { h, s, max };
+    }
+
+    private static int hsvToRgb(float h, float s, float v) {
+        float c = v * s;
+        float x = c * (1f - Math.abs(((h / 60f) % 2f) - 1f));
+        float m = v - c;
+        float r, g, b;
+        if (h < 60) { r = c; g = x; b = 0; }
+        else if (h < 120) { r = x; g = c; b = 0; }
+        else if (h < 180) { r = 0; g = c; b = x; }
+        else if (h < 240) { r = 0; g = x; b = c; }
+        else if (h < 300) { r = x; g = 0; b = c; }
+        else { r = c; g = 0; b = x; }
+        int ri = Math.round((r + m) * 255f);
+        int gi = Math.round((g + m) * 255f);
+        int bi = Math.round((b + m) * 255f);
+        return (ri << 16) | (gi << 8) | bi;
     }
 
     /** Handles /fcolor models: resolves every number in the range, then optionally recolors the unique textures. */
