@@ -50,11 +50,16 @@ public class FrumaColorClient implements ClientModInitializer {
         public int spread = 25;                                  // shift mode: how many degrees of hue variety to keep
     }
 
+    /** Menu presets. Edit these hex values to change the colors. */
+    public static final String[] PRESET_NAMES = { "Deep Crimson", "Blue", "Cyan", "Yellow", "Orange", "Green" };
+    public static final int[] PRESET_COLORS = { 0x8A0C20, 0x1E5BFF, 0x00E5FF, 0xFFE600, 0xFF7A00, 0x22DD44 };
+
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Path FILE = FabricLoader.getInstance().getConfigDir().resolve("frumacolor.json");
     public static Config config = new Config();
 
     private static boolean logging = false;
+    private static boolean openMenu = false;
     private static final Set<String> seen = new HashSet<>();
     private static final Set<String> SPRITES = ConcurrentHashMap.newKeySet();
 
@@ -83,6 +88,11 @@ public class FrumaColorClient implements ClientModInitializer {
         load();
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            // open the menu once the chat screen has closed
+            if (openMenu && client.screen == null) {
+                openMenu = false;
+                client.setScreen(new ColorMenuScreen());
+            }
             if (!watching) return;
             try {
                 sampleItemDisplays(watchSrc, (t, n) -> { if (!baseline.contains(t)) watchFound.putIfAbsent(t, n); });
@@ -92,6 +102,25 @@ public class FrumaColorClient implements ClientModInitializer {
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             dispatcher.register(ClientCommandManager.literal("fcolor")
+                // /fcolor menu : opens the preset menu
+                .then(ClientCommandManager.literal("menu")
+                    .executes(ctx -> {
+                        openMenu = true;
+                        return 1;
+                    }))
+                // /fcolor preset <name> : applies a preset color to every texture rule (crimson, blue, cyan, yellow, orange, green)
+                .then(ClientCommandManager.literal("preset")
+                    .then(ClientCommandManager.argument("name", StringArgumentType.word()).executes(ctx -> {
+                        String arg = StringArgumentType.getString(ctx, "name").toLowerCase();
+                        for (int i = 0; i < PRESET_NAMES.length; i++) {
+                            if (PRESET_NAMES[i].toLowerCase().replace(" ", "").contains(arg)) {
+                                applyPreset(PRESET_COLORS[i], PRESET_NAMES[i]);
+                                return 1;
+                            }
+                        }
+                        msg(ctx.getSource(), "Unknown preset. Use: crimson, blue, cyan, yellow, orange, green");
+                        return 0;
+                    })))
                 // /fcolor add end_rod FF00AA
                 .then(ClientCommandManager.literal("add")
                     .then(ClientCommandManager.argument("particle", StringArgumentType.word())
@@ -145,12 +174,12 @@ public class FrumaColorClient implements ClientModInitializer {
                 // /fcolor mode shift|solid : shift keeps the multicolor look, solid paints everything one color
                 .then(ClientCommandManager.literal("mode")
                     .then(ClientCommandManager.literal("shift").executes(ctx -> {
-                        config.shift = true; save(); reload();
+                        setShift(true);
                         msg(ctx.getSource(), "Mode: shift (keeps the multicolor look). Reloading...");
                         return 1;
                     }))
                     .then(ClientCommandManager.literal("solid").executes(ctx -> {
-                        config.shift = false; save(); reload();
+                        setShift(false);
                         msg(ctx.getSource(), "Mode: solid (one flat color). Reloading...");
                         return 1;
                     })))
@@ -309,6 +338,25 @@ public class FrumaColorClient implements ClientModInitializer {
                         return 1;
                     })));
         });
+    }
+
+    /** Used by the menu and /fcolor preset: gives every texture rule the same color, then reloads. */
+    public static void applyPreset(int rgb, String name) {
+        if (config.textures.isEmpty()) {
+            chat("No effect rules yet. Set the effects up first (/fcolor watch, then /fcolor watchapply B0102A).");
+            return;
+        }
+        int n = config.textures.size();
+        for (Map.Entry<String, Integer> e : config.textures.entrySet()) e.setValue(rgb);
+        save();
+        reload();
+        chat(name + " applied to " + n + " texture rule(s). Reloading...");
+    }
+
+    public static void setShift(boolean shift) {
+        config.shift = shift;
+        save();
+        reload();
     }
 
     /** Starts /fcolor watch: remembers what is around now, then records anything new for the given time. */
