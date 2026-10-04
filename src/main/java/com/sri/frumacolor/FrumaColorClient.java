@@ -30,6 +30,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -49,6 +51,11 @@ public class FrumaColorClient implements ClientModInitializer {
     private static boolean logging = false;
     private static final Set<String> seen = new HashSet<>();
     private static final Set<String> SPRITES = ConcurrentHashMap.newKeySet();
+
+    // diagnostics, reset each time the mod triggers a reload
+    private static final AtomicInteger SEEN_SINCE_RELOAD = new AtomicInteger();
+    private static final AtomicInteger TINTED_SINCE_RELOAD = new AtomicInteger();
+    private static final ConcurrentLinkedQueue<String> TINTED_SAMPLE = new ConcurrentLinkedQueue<>();
 
     @Override
     public void onInitializeClient() {
@@ -88,6 +95,16 @@ public class FrumaColorClient implements ClientModInitializer {
                         save();
                         reload();
                         msg(ctx.getSource(), "Cleared everything. Reloading textures...");
+                        return 1;
+                    }))
+                // /fcolor debug : what happened during the last reload
+                .then(ClientCommandManager.literal("debug")
+                    .executes(ctx -> {
+                        msg(ctx.getSource(), "Rules saved: " + config.textures.size()
+                            + " | textures loaded since last mod reload: " + SEEN_SINCE_RELOAD.get()
+                            + " | recolored: " + TINTED_SINCE_RELOAD.get()
+                            + " | total names ever seen: " + SPRITES.size());
+                        for (String s : TINTED_SAMPLE) msg(ctx.getSource(), "recolored: " + s);
                         return 1;
                     }))
                 // /fcolor list
@@ -237,18 +254,24 @@ public class FrumaColorClient implements ClientModInitializer {
     }
 
     private static void reload() {
+        SEEN_SINCE_RELOAD.set(0);
+        TINTED_SINCE_RELOAD.set(0);
+        TINTED_SAMPLE.clear();
         Minecraft mc = Minecraft.getInstance();
         mc.execute(mc::reloadResourcePacks);
     }
 
     /** Called from the sprite mixin each time a texture is loaded. */
     public static void onSprite(String name, NativeImage img) {
+        SEEN_SINCE_RELOAD.incrementAndGet();
         if (SPRITES.size() < 200000) SPRITES.add(name);
         if (config.textures.isEmpty() || img == null) return;
         String lower = name.toLowerCase();
         for (Map.Entry<String, Integer> e : config.textures.entrySet()) {
             if (lower.contains(e.getKey())) {
                 tint(img, e.getValue());
+                TINTED_SINCE_RELOAD.incrementAndGet();
+                if (TINTED_SAMPLE.size() < 8) TINTED_SAMPLE.add(name);
                 return;
             }
         }
