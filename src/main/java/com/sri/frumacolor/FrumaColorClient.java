@@ -3,6 +3,7 @@ package com.sri.frumacolor;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.mojang.blaze3d.platform.NativeImage;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
@@ -24,6 +25,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -141,11 +143,11 @@ public class FrumaColorClient implements ClientModInitializer {
                             msg(ctx.getSource(), "Textures matching '" + kw + "' -> #" + String.format("%06X", rgb) + ". Reloading...");
                             return 1;
                         }))))
-                // /fcolor model <number> [hex] : look up an oak_boat custom model number, show its textures, optionally recolor them
+                // /fcolor model <number> [hex] : look up ONE oak_boat custom model number, show its textures, optionally recolor
                 .then(ClientCommandManager.literal("model")
                     .then(ClientCommandManager.argument("number", StringArgumentType.word())
                         .executes(ctx -> {
-                            List<String> kws = resolve(ctx.getSource(), StringArgumentType.getString(ctx, "number"));
+                            List<String> kws = resolve(ctx.getSource(), StringArgumentType.getString(ctx, "number"), false);
                             for (String k : kws) msg(ctx.getSource(), "texture: " + k);
                             if (!kws.isEmpty()) msg(ctx.getSource(), "Add a hex color to the command to recolor these.");
                             return 1;
@@ -153,7 +155,7 @@ public class FrumaColorClient implements ClientModInitializer {
                         .then(ClientCommandManager.argument("hex", StringArgumentType.word()).executes(ctx -> {
                             Integer rgb = parseHex(StringArgumentType.getString(ctx, "hex"));
                             if (rgb == null) { msg(ctx.getSource(), "Bad hex color."); return 0; }
-                            List<String> kws = resolve(ctx.getSource(), StringArgumentType.getString(ctx, "number"));
+                            List<String> kws = resolve(ctx.getSource(), StringArgumentType.getString(ctx, "number"), false);
                             if (kws.isEmpty()) return 0;
                             for (String k : kws) {
                                 config.textures.put(k, rgb);
@@ -163,6 +165,21 @@ public class FrumaColorClient implements ClientModInitializer {
                             save(); reload();
                             return 1;
                         }))))
+                // /fcolor models <from> <to> [hex] : the same for a whole range of numbers, e.g. 40424 to 40434
+                .then(ClientCommandManager.literal("models")
+                    .then(ClientCommandManager.argument("from", IntegerArgumentType.integer(0))
+                        .then(ClientCommandManager.argument("to", IntegerArgumentType.integer(0))
+                            .executes(ctx -> rangeCmd(ctx.getSource(),
+                                IntegerArgumentType.getInteger(ctx, "from"),
+                                IntegerArgumentType.getInteger(ctx, "to"), null))
+                            .then(ClientCommandManager.argument("hex", StringArgumentType.word())
+                                .executes(ctx -> {
+                                    Integer rgb = parseHex(StringArgumentType.getString(ctx, "hex"));
+                                    if (rgb == null) { msg(ctx.getSource(), "Bad hex color."); return 0; }
+                                    return rangeCmd(ctx.getSource(),
+                                        IntegerArgumentType.getInteger(ctx, "from"),
+                                        IntegerArgumentType.getInteger(ctx, "to"), rgb);
+                                })))))
                 // /fcolor find <keyword> : list loaded texture names containing the keyword
                 .then(ClientCommandManager.literal("find")
                     .then(ClientCommandManager.argument("keyword", StringArgumentType.word()).executes(ctx -> {
@@ -252,6 +269,37 @@ public class FrumaColorClient implements ClientModInitializer {
         }
     }
 
+    /** Handles /fcolor models: resolves every number in the range, then optionally recolors the unique textures. */
+    private static int rangeCmd(FabricClientCommandSource src, int from, int to, Integer rgb) {
+        if (to < from || to - from > 200) {
+            msg(src, "Use a low number then a high number, at most 200 apart.");
+            return 0;
+        }
+        Set<String> kws = new LinkedHashSet<>();
+        int missing = 0;
+        for (int n = from; n <= to; n++) {
+            List<String> k = resolve(src, String.valueOf(n), true);
+            if (k.isEmpty()) missing++; else kws.addAll(k);
+        }
+        msg(src, "Numbers " + from + "-" + to + ": " + kws.size() + " unique texture(s), "
+            + missing + " number(s) with none found.");
+        int shown = 0;
+        for (String k : kws) {
+            msg(src, "texture: " + k);
+            if (++shown >= 30) { msg(src, "...and more"); break; }
+        }
+        if (rgb == null) {
+            if (!kws.isEmpty()) msg(src, "Add a hex color to recolor these.");
+            return 1;
+        }
+        if (kws.isEmpty()) return 0;
+        for (String k : kws) config.textures.put(k, rgb);
+        save();
+        reload();
+        msg(src, "Recolored to #" + String.format("%06X", rgb) + ". Reloading textures... (undo all: /fcolor clear)");
+        return 1;
+    }
+
     private static String readText(Resource r) {
         try (java.io.InputStream in = r.open()) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
@@ -260,8 +308,12 @@ public class FrumaColorClient implements ClientModInitializer {
         }
     }
 
-    /** Turns an oak_boat custom model number into the texture names its model uses. Prints each step. */
-    private static List<String> resolve(FabricClientCommandSource src, String numberRaw) {
+    private static void say(FabricClientCommandSource src, boolean quiet, String text) {
+        if (!quiet) msg(src, text);
+    }
+
+    /** Turns an oak_boat custom model number into the texture names its model uses. */
+    private static List<String> resolve(FabricClientCommandSource src, String numberRaw, boolean quiet) {
         List<String> out = new ArrayList<>();
         String number = numberRaw.replaceAll("\\.0+$", "");
         var rm = Minecraft.getInstance().getResourceManager();
@@ -274,7 +326,7 @@ public class FrumaColorClient implements ClientModInitializer {
                 + "(?![0-9])(?:\\.0+)?[\\s\\S]*?\"model\"\\s*:\\s*\"([^\"]+)\"").matcher(text);
             if (m.find()) {
                 model = m.group(1);
-                msg(src, "found " + number + " in " + en.getKey() + " -> model " + model);
+                say(src, quiet, "found " + number + " in " + en.getKey() + " -> model " + model);
                 break;
             }
         }
@@ -287,14 +339,14 @@ public class FrumaColorClient implements ClientModInitializer {
                     + "(?![0-9])[\\s\\S]*?\"model\"\\s*:\\s*\"([^\"]+)\"").matcher(text);
                 if (m.find()) {
                     model = m.group(1);
-                    msg(src, "found " + number + " in " + en.getKey() + " -> model " + model);
+                    say(src, quiet, "found " + number + " in " + en.getKey() + " -> model " + model);
                     break;
                 }
             }
         }
 
         if (model == null) {
-            msg(src, "Could not find " + number + " in any oak_boat file. Send me this message.");
+            say(src, quiet, "Could not find " + number + " in any oak_boat file. Send me this message.");
             return out;
         }
 
@@ -312,13 +364,13 @@ public class FrumaColorClient implements ClientModInitializer {
             }
         }
         if (modelText == null) {
-            msg(src, "Model file not found: " + target + ". Send me this message.");
+            say(src, quiet, "Model file not found: " + target + ". Send me this message.");
             return out;
         }
 
         Matcher tb = Pattern.compile("\"textures\"\\s*:\\s*\\{([^}]*)\\}").matcher(modelText);
         if (!tb.find()) {
-            msg(src, "Model " + target + " has no textures block (it probably uses a parent model). Send me this message.");
+            say(src, quiet, "Model " + target + " has no textures block (it probably uses a parent model). Send me this message.");
             return out;
         }
         Matcher tv = Pattern.compile("\"[^\"]+\"\\s*:\\s*\"([^\"]+)\"").matcher(tb.group(1));
@@ -331,7 +383,7 @@ public class FrumaColorClient implements ClientModInitializer {
             if (t.equals("empty") || t.isEmpty()) continue;         // skip the blank placeholder
             if (!out.contains(t)) out.add(t);
         }
-        if (out.isEmpty()) msg(src, "Model had no usable textures. Send me this message.");
+        if (out.isEmpty()) say(src, quiet, "Model had no usable textures. Send me this message.");
         return out;
     }
 
