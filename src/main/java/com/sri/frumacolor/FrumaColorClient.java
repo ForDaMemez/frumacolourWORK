@@ -170,7 +170,7 @@ public class FrumaColorClient implements ClientModInitializer {
                 .then(ClientCommandManager.literal("model")
                     .then(ClientCommandManager.argument("number", StringArgumentType.word())
                         .executes(ctx -> {
-                            List<String> kws = resolve(ctx.getSource(), StringArgumentType.getString(ctx, "number"), false);
+                            List<String> kws = resolve(ctx.getSource(), "oak_boat", StringArgumentType.getString(ctx, "number"), false);
                             for (String k : kws) msg(ctx.getSource(), "texture: " + k);
                             if (!kws.isEmpty()) msg(ctx.getSource(), "Add a hex color to the command to recolor these.");
                             return 1;
@@ -178,7 +178,7 @@ public class FrumaColorClient implements ClientModInitializer {
                         .then(ClientCommandManager.argument("hex", StringArgumentType.word()).executes(ctx -> {
                             Integer rgb = parseHex(StringArgumentType.getString(ctx, "hex"));
                             if (rgb == null) { msg(ctx.getSource(), "Bad hex color."); return 0; }
-                            List<String> kws = resolve(ctx.getSource(), StringArgumentType.getString(ctx, "number"), false);
+                            List<String> kws = resolve(ctx.getSource(), "oak_boat", StringArgumentType.getString(ctx, "number"), false);
                             if (kws.isEmpty()) return 0;
                             for (String k : kws) {
                                 config.textures.put(k, rgb);
@@ -217,23 +217,34 @@ public class FrumaColorClient implements ClientModInitializer {
                         if (n == 0) msg(ctx.getSource(), "No loaded textures match '" + kw + "'.");
                         return 1;
                     })))
-                // /fcolor entities : lists entities within 6 blocks, and what item displays are showing
+                // /fcolor entities : lists entities within 10 blocks; for item displays also prints the textures each one uses
                 .then(ClientCommandManager.literal("entities")
                     .executes(ctx -> {
                         Minecraft mc = Minecraft.getInstance();
                         if (mc.level == null || mc.player == null) return 0;
                         int n = 0;
                         for (Entity e : mc.level.entitiesForRendering()) {
-                            if (e == mc.player || e.distanceTo(mc.player) > 6) continue;
+                            if (e == mc.player || e.distanceTo(mc.player) > 10) continue;
                             String type = String.valueOf(BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()));
-                            msg(ctx.getSource(), type + " | name=\"" + e.getName().getString()
-                                + "\" | glowing=" + e.isCurrentlyGlowing());
                             if (type.equals("minecraft:item_display")) {
                                 var stack = e.getSlot(0).get();
-                                msg(ctx.getSource(), "   item=" + BuiltInRegistries.ITEM.getKey(stack.getItem())
-                                    + " " + stack.getComponentsPatch());
+                                String full = String.valueOf(BuiltInRegistries.ITEM.getKey(stack.getItem()));
+                                String itemPath = full.substring(full.indexOf(':') + 1);
+                                String patch = String.valueOf(stack.getComponentsPatch());
+                                Matcher fm = Pattern.compile("floats=\\[([0-9]+)").matcher(patch);
+                                if (itemPath.equals("air")) {
+                                    msg(ctx.getSource(), "item_display: empty");
+                                } else if (fm.find()) {
+                                    String num = fm.group(1);
+                                    List<String> t = resolve(ctx.getSource(), itemPath, num, true);
+                                    msg(ctx.getSource(), "item_display: " + itemPath + " #" + num + " -> textures " + t);
+                                } else {
+                                    msg(ctx.getSource(), "item_display: " + itemPath + " " + patch);
+                                }
+                            } else {
+                                msg(ctx.getSource(), type + " | name=\"" + e.getName().getString() + "\"");
                             }
-                            if (++n >= 15) break;
+                            if (++n >= 80) break;
                         }
                         return 1;
                     })));
@@ -314,7 +325,7 @@ public class FrumaColorClient implements ClientModInitializer {
         Set<String> kws = new LinkedHashSet<>();
         int missing = 0;
         for (int n = from; n <= to; n++) {
-            List<String> k = resolve(src, String.valueOf(n), true);
+            List<String> k = resolve(src, "oak_boat", String.valueOf(n), true);
             if (k.isEmpty()) missing++; else kws.addAll(k);
         }
         msg(src, "Numbers " + from + "-" + to + ": " + kws.size() + " unique texture(s), "
@@ -348,15 +359,15 @@ public class FrumaColorClient implements ClientModInitializer {
         if (!quiet) msg(src, text);
     }
 
-    /** Turns an oak_boat custom model number into the texture names its model uses. */
-    private static List<String> resolve(FabricClientCommandSource src, String numberRaw, boolean quiet) {
+    /** Turns a custom model number on the given item (e.g. oak_boat) into the texture names its model uses. */
+    private static List<String> resolve(FabricClientCommandSource src, String itemName, String numberRaw, boolean quiet) {
         List<String> out = new ArrayList<>();
         String number = numberRaw.replaceAll("\\.0+$", "");
         var rm = Minecraft.getInstance().getResourceManager();
         String model = null;
 
-        // 1) modern item definition: assets/<ns>/items/oak_boat.json (range_dispatch with thresholds)
-        for (var en : rm.listResources("items", p -> p.getPath().contains("oak_boat")).entrySet()) {
+        // 1) modern item definition: assets/<ns>/items/<item>.json (range_dispatch with thresholds)
+        for (var en : rm.listResources("items", p -> p.getPath().endsWith("/" + itemName + ".json")).entrySet()) {
             String text = readText(en.getValue());
             Matcher m = Pattern.compile("\"threshold\"\\s*:\\s*" + number
                 + "(?![0-9])(?:\\.0+)?[\\s\\S]*?\"model\"\\s*:\\s*\"([^\"]+)\"").matcher(text);
@@ -367,9 +378,9 @@ public class FrumaColorClient implements ClientModInitializer {
             }
         }
 
-        // 2) older style: overrides inside models/item/oak_boat.json
+        // 2) older style: overrides inside models/item/<item>.json
         if (model == null) {
-            for (var en : rm.listResources("models", p -> p.getPath().endsWith("item/oak_boat.json")).entrySet()) {
+            for (var en : rm.listResources("models", p -> p.getPath().endsWith("item/" + itemName + ".json")).entrySet()) {
                 String text = readText(en.getValue());
                 Matcher m = Pattern.compile("\"custom_model_data\"\\s*:\\s*" + number
                     + "(?![0-9])[\\s\\S]*?\"model\"\\s*:\\s*\"([^\"]+)\"").matcher(text);
@@ -382,7 +393,7 @@ public class FrumaColorClient implements ClientModInitializer {
         }
 
         if (model == null) {
-            say(src, quiet, "Could not find " + number + " in any oak_boat file. Send me this message.");
+            say(src, quiet, "Could not find " + number + " in any " + itemName + " file. Send me this message.");
             return out;
         }
 
