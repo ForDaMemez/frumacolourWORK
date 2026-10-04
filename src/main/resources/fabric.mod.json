@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "frumacolor",
+  "version": "1.0.0",
+  "name": "Fruma Color",
+  "description": "Recolor particles in-game with /fcolor.",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.sri.frumacolor.FrumaColorClient"
+    ]
+  },
+  "mixins": [
+    {
+      "config": "frumacolor.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

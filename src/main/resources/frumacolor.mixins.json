@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "com.sri.frumacolor.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "ParticleEngineMixin",
+    "SpriteContentsMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
