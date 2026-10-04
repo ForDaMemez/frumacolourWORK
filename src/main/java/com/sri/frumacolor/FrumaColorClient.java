@@ -29,9 +29,9 @@ public class FrumaColorClient implements ClientModInitializer {
 
     /** Saved to config/frumacolor.json */
     public static class Config {
-        public Map<String, Integer> colors = new HashMap<>(); // particle id -> 0xRRGGBB
+        public Map<String, Integer> colors = new HashMap<>();   // particle id -> 0xRRGGBB
         public Map<String, Integer> textures = new HashMap<>(); // sprite-name keyword -> 0xRRGGBB
-        public int allColor = -1;                              // -1 = off, otherwise tint every particle (test mode)
+        public int allColor = -1;                                // -1 = off, otherwise tint every particle (test mode)
     }
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -106,8 +106,7 @@ public class FrumaColorClient implements ClientModInitializer {
                         msg(ctx.getSource(), "Logging off");
                         return 1;
                     })))
-
-                // /fcolor tex <keyword> <hex|off> : recolor every item/block texture whose name contains <keyword>, then reload
+                // /fcolor tex <keyword> <hex|off> : recolor every texture whose name contains <keyword>, then reload
                 .then(ClientCommandManager.literal("tex")
                     .then(ClientCommandManager.argument("keyword", StringArgumentType.word())
                         .then(ClientCommandManager.literal("off").executes(ctx -> {
@@ -133,13 +132,13 @@ public class FrumaColorClient implements ClientModInitializer {
                         for (String name : SPRITES) {
                             if (name.toLowerCase().contains(kw)) {
                                 msg(ctx.getSource(), name);
-                                if (++n >= 25) { msg(ctx.getSource(), "...more not shown, use a longer keyword"); break; }
+                                if (++n >= 40) { msg(ctx.getSource(), "...more not shown, use a longer keyword"); break; }
                             }
                         }
                         if (n == 0) msg(ctx.getSource(), "No loaded textures match '" + kw + "'.");
                         return 1;
                     })))
-                // /fcolor entities : lists entities within 6 blocks (stand next to your totem)
+                // /fcolor entities : lists entities within 6 blocks, and what item displays are showing
                 .then(ClientCommandManager.literal("entities")
                     .executes(ctx -> {
                         Minecraft mc = Minecraft.getInstance();
@@ -150,6 +149,11 @@ public class FrumaColorClient implements ClientModInitializer {
                             String type = String.valueOf(BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()));
                             msg(ctx.getSource(), type + " | name=\"" + e.getName().getString()
                                 + "\" | glowing=" + e.isCurrentlyGlowing());
+                            if (type.equals("minecraft:item_display")) {
+                                var stack = e.getSlot(0).get();
+                                msg(ctx.getSource(), "   item=" + BuiltInRegistries.ITEM.getKey(stack.getItem())
+                                    + " " + stack.getComponentsPatch());
+                            }
                             if (++n >= 15) break;
                         }
                         return 1;
@@ -157,7 +161,7 @@ public class FrumaColorClient implements ClientModInitializer {
         });
     }
 
-    /** Called from the mixin every time a particle is created. */
+    /** Called from the particle mixin every time a particle is created. */
     public static void onParticle(ParticleOptions options, Particle particle, double x, double y, double z) {
         String id = String.valueOf(BuiltInRegistries.PARTICLE_TYPE.getKey(options.getType()));
 
@@ -175,7 +179,6 @@ public class FrumaColorClient implements ClientModInitializer {
             quad.setColor(((rgb >> 16) & 0xFF) / 255f, ((rgb >> 8) & 0xFF) / 255f, (rgb & 0xFF) / 255f);
         }
     }
-
 
     private static void reload() {
         Minecraft mc = Minecraft.getInstance();
