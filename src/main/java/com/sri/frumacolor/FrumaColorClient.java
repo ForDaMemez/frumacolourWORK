@@ -486,13 +486,13 @@ public class FrumaColorClient implements ClientModInitializer {
                     } else {
                         // squeeze the original hue range into a band around the target hue, keeping the order of colors
                        float t = (hsv[0] - 180f) / 180f;                                    // -1..1
-                        float bent = Math.signum(t) * (float) Math.pow(Math.abs(t), 2.2);    // most pixels stay near the target hue
+                        float bent = Math.signum(t) * (float) Math.pow(Math.abs(t), 3.5);   // most pixels collapse onto the target hue
                         boolean redish = targetHue > 330f || targetHue < 15f;
-                        if (redish && bent < 0) bent *= 0.35f;                               // squeeze the pink side of crimson
-                        float h = targetHue + bent * spread;
+                        if (redish && bent < 0) bent *= 0.12f;                               // only a little pink on the rose side
+                        float h = targetHue + (bent + 0.08f) * spread;                       // slight lean toward red/orange-red
                         if (h < 0) h += 360f;
                         if (h >= 360f) h -= 360f;
-                        float s = Math.min(1f, 0.85f + 0.15f * hsv[1]);                      // keeps colors rich, not pastel
+                        float s = Math.min(1f, 0.9f + 0.1f * hsv[1]);                        // rich color, no pastel
                         out = hsvToRgb(h, s, hsv[2]);
                     }
                 } else {
